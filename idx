@@ -18,6 +18,7 @@ function saveIndex(idx) {
   fs.writeFileSync(INDEX_FILE, JSON.stringify(idx, null, 2));
 }
 
+function short(p) { return p.replace(HOME + '/Documents/', ''); }
 function rel(p) { return p.replace(HOME, '~'); }
 
 function usage() {
@@ -43,13 +44,19 @@ function cmdInit() {
   for (const d of DIRS) {
     const p = path.join(BASE, d);
     fs.mkdirSync(p, { recursive: true });
-    console.log(`  ${rel(p)}/`);
+    console.log(`  ${short(p)}/`);
   }
 }
 
 function cmdScan(target) {
   const idx = loadIndex();
   const scanPath = target ? path.resolve(target) : BASE;
+
+  if (!target) {
+    const before = idx.entries.length;
+    idx.entries = idx.entries.filter(e => fs.existsSync(e.path));
+    if (before > idx.entries.length) console.log(`  cleaned ${before - idx.entries.length} stale entries`);
+  }
   if (!fs.existsSync(scanPath)) { console.error('error: path not found'); process.exit(1); }
 
   const SKIP_DIRS = ['node_modules', '.git', '.next', 'dist', 'build', '.cache', '.DS_Store'];
@@ -84,7 +91,7 @@ function cmdScan(target) {
         };
         idx.entries.push(entry);
         entries.push(entry);
-        console.log(`  + ${rel(full)}`);
+        console.log(`  + ${short(full)}`);
       }
 
       if (item.isDirectory() && depth < 2) walk(full, depth + 1);
@@ -92,27 +99,22 @@ function cmdScan(target) {
   }
 
   walk(scanPath, 0);
-
-  walk(scanPath);
   saveIndex(idx);
-  console.log(`\n${entries.length} items indexed`);
+  console.log(`\n  ${entries.length} items indexed`);
+}
+
+function printEntry(e) {
+  const tags = e.tags.length ? e.tags.join(', ') : '-';
+  const icon = e.type === 'dir' ? '📁' : '📄';
+  console.log(`  ${icon} ${short(e.path).padEnd(40)} ${tags}`);
 }
 
 function cmdList(filterTag) {
   const idx = loadIndex();
   let entries = idx.entries;
   if (filterTag) entries = entries.filter(e => e.tags.includes(filterTag));
-
-  if (entries.length === 0) { console.log('(no entries)'); return; }
-
-  const tagWidth = Math.max(...entries.map(e =>
-    e.tags.length ? e.tags.join(', ').length : 0
-  ), 4);
-
-  for (const e of entries) {
-    const tags = e.tags.length ? e.tags.join(', ') : '';
-    console.log(`  ${rel(e.path).padEnd(50)}  [${tags.padEnd(tagWidth)}]  ${e.type}`);
-  }
+  if (entries.length === 0) { console.log('  (no entries)'); return; }
+  for (const e of entries) printEntry(e);
 }
 
 function cmdFind(query) {
@@ -123,11 +125,8 @@ function cmdFind(query) {
     e.path.toLowerCase().includes(q) ||
     e.tags.some(t => t.toLowerCase().includes(q))
   );
-
-  if (entries.length === 0) { console.log('(no matches)'); return; }
-  for (const e of entries) {
-    console.log(`  ${rel(e.path).padEnd(50)}  [${e.tags.join(', ').padEnd(12)}]  ${e.type}`);
-  }
+  if (entries.length === 0) { console.log('  (no matches)'); return; }
+  for (const e of entries) printEntry(e);
 }
 
 function cmdTags() {
@@ -137,12 +136,12 @@ function cmdTags() {
     for (const t of e.tags) { tagMap[t] = (tagMap[t] || 0) + 1; }
   }
   const sorted = Object.entries(tagMap).sort((a, b) => b[1] - a[1]);
-  if (sorted.length === 0) { console.log('(no tags)'); return; }
+  if (sorted.length === 0) { console.log('  (no tags)'); return; }
   const maxCount = sorted[0][1];
   const barWidth = 20;
   for (const [tag, count] of sorted) {
     const bar = '█'.repeat(Math.round((count / maxCount) * barWidth));
-    console.log(`  ${tag.padEnd(12)} ${String(count).padStart(3)}  ${bar}`);
+    console.log(`  ${tag.padEnd(16)} ${String(count).padStart(3)}  ${bar}`);
   }
 }
 
@@ -166,7 +165,7 @@ function cmdTag(query, mode, tagArgs) {
     } else if (mode === 'del') {
       e.tags = e.tags.filter(t => !tagArgs.includes(t));
     }
-    console.log(`  ${rel(e.path)}  ${old.join(', ').padEnd(15)} → ${e.tags.join(', ')}`);
+    console.log(`  ${short(e.path)}  ${old.join(', ')} → ${e.tags.join(', ')}`);
   }
   saveIndex(idx);
 }
