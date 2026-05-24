@@ -1,7 +1,7 @@
 {
-  "name": "idx",
+  "name": "idx-cli",
   "version": "1.0.0",
   "description": "Local knowledge & project indexer — scan, tag, search your Documents",
-  "bin": { "idx": "./idx" },
+  "bin": { "idx": "./idx", "idx-cli": "./idx" },
   "license": "MIT"
 }
