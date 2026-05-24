@@ -1,0 +1,205 @@
+#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const HOME = os.homedir();
+const BASE = path.join(HOME, 'Documents');
+const DIRS = ['projects', 'notes', 'archives', 'inbox'];
+const INDEX_FILE = path.join(HOME, '.local', 'share', 'idx', 'index.json');
+
+function loadIndex() {
+  try { return JSON.parse(fs.readFileSync(INDEX_FILE, 'utf-8')); }
+  catch { return { version: 1, entries: [] }; }
+}
+
+function saveIndex(idx) {
+  fs.mkdirSync(path.dirname(INDEX_FILE), { recursive: true });
+  fs.writeFileSync(INDEX_FILE, JSON.stringify(idx, null, 2));
+}
+
+function rel(p) { return p.replace(HOME, '~'); }
+
+function usage() {
+  console.log(`
+Usage: idx <command> [args]
+
+Commands:
+  init              Create ~/Documents/{projects,notes,archives,inbox}/
+  scan [path]       Index files/directories (default: ~/Documents)
+  list [--tag t]    List indexed items, filter by tag
+  find <query>      Search by name or path
+  tags              Show all tags with counts
+  tag <query> <t1> [t2..]    Replace tags for matching items
+  tag <query> --add <t1>     Add tags
+  tag <query> --del <t1>     Remove tags
+  -h, --help        Show this help
+`);
+}
+
+// --- Commands ---
+
+function cmdInit() {
+  for (const d of DIRS) {
+    const p = path.join(BASE, d);
+    fs.mkdirSync(p, { recursive: true });
+    console.log(`  ${rel(p)}/`);
+  }
+}
+
+function cmdScan(target) {
+  const idx = loadIndex();
+  const scanPath = target ? path.resolve(target) : BASE;
+  if (!fs.existsSync(scanPath)) { console.error('error: path not found'); process.exit(1); }
+
+  const SKIP_DIRS = ['node_modules', '.git', '.next', 'dist', 'build', '.cache', '.DS_Store'];
+
+  function shouldSkip(name, isDir) {
+    return name.startsWith('.') || (isDir && SKIP_DIRS.includes(name));
+  }
+
+  const entries = [];
+  function walk(dir, depth) {
+    let items;
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }
+    for (const item of items) {
+      if (shouldSkip(item.name, item.isDirectory())) continue;
+      const full = path.join(dir, item.name);
+      const existing = idx.entries.find(e => e.path === full);
+      const defaultTags = [path.basename(path.dirname(full)).replace(/^_/, '')].filter(Boolean);
+
+      if (existing) {
+        existing.updated = new Date().toISOString();
+        if (existing.tags.length === 0) existing.tags = defaultTags;
+        entries.push(existing);
+      } else {
+        const entry = {
+          path: full,
+          name: item.name,
+          type: item.isDirectory() ? 'dir' : 'file',
+          tags: defaultTags,
+          created: new Date().toISOString(),
+          updated: new Date().toISOString(),
+        };
+        idx.entries.push(entry);
+        entries.push(entry);
+        console.log(`  + ${rel(full)}`);
+      }
+
+      if (item.isDirectory() && depth < 2) walk(full, depth + 1);
+    }
+  }
+
+  walk(scanPath, 0);
+
+  walk(scanPath);
+  saveIndex(idx);
+  console.log(`\n${entries.length} items indexed`);
+}
+
+function cmdList(filterTag) {
+  const idx = loadIndex();
+  let entries = idx.entries;
+  if (filterTag) entries = entries.filter(e => e.tags.includes(filterTag));
+
+  if (entries.length === 0) { console.log('(no entries)'); return; }
+
+  const tagWidth = Math.max(...entries.map(e =>
+    e.tags.length ? e.tags.join(', ').length : 0
+  ), 4);
+
+  for (const e of entries) {
+    const tags = e.tags.length ? e.tags.join(', ') : '';
+    console.log(`  ${rel(e.path).padEnd(50)}  [${tags.padEnd(tagWidth)}]  ${e.type}`);
+  }
+}
+
+function cmdFind(query) {
+  const idx = loadIndex();
+  const q = query.toLowerCase();
+  const entries = idx.entries.filter(e =>
+    e.name.toLowerCase().includes(q) ||
+    e.path.toLowerCase().includes(q) ||
+    e.tags.some(t => t.toLowerCase().includes(q))
+  );
+
+  if (entries.length === 0) { console.log('(no matches)'); return; }
+  for (const e of entries) {
+    console.log(`  ${rel(e.path).padEnd(50)}  [${e.tags.join(', ').padEnd(12)}]  ${e.type}`);
+  }
+}
+
+function cmdTags() {
+  const idx = loadIndex();
+  const tagMap = {};
+  for (const e of idx.entries) {
+    for (const t of e.tags) { tagMap[t] = (tagMap[t] || 0) + 1; }
+  }
+  const sorted = Object.entries(tagMap).sort((a, b) => b[1] - a[1]);
+  if (sorted.length === 0) { console.log('(no tags)'); return; }
+  const maxCount = sorted[0][1];
+  const barWidth = 20;
+  for (const [tag, count] of sorted) {
+    const bar = '█'.repeat(Math.round((count / maxCount) * barWidth));
+    console.log(`  ${tag.padEnd(12)} ${String(count).padStart(3)}  ${bar}`);
+  }
+}
+
+function cmdTag(query, mode, tagArgs) {
+  const idx = loadIndex();
+  const q = query.toLowerCase();
+  const entries = idx.entries.filter(e =>
+    e.name.toLowerCase().includes(q) ||
+    e.path.toLowerCase().includes(q) ||
+    e.tags.some(t => t.toLowerCase().includes(q))
+  );
+
+  if (entries.length === 0) { console.log('(no matches)'); process.exit(1); }
+
+  for (const e of entries) {
+    const old = [...e.tags];
+    if (mode === 'set') {
+      e.tags = [...new Set(tagArgs)];
+    } else if (mode === 'add') {
+      for (const t of tagArgs) { if (!e.tags.includes(t)) e.tags.push(t); }
+    } else if (mode === 'del') {
+      e.tags = e.tags.filter(t => !tagArgs.includes(t));
+    }
+    console.log(`  ${rel(e.path)}  ${old.join(', ').padEnd(15)} → ${e.tags.join(', ')}`);
+  }
+  saveIndex(idx);
+}
+
+// --- Main ---
+
+const cmd = process.argv[2];
+const arg1 = process.argv[3];
+const arg2 = process.argv[4];
+const arg3 = process.argv[5];
+
+if (!cmd || cmd === '-h' || cmd === '--help') { usage(); process.exit(0); }
+
+switch (cmd) {
+  case 'init':
+    cmdInit(); break;
+  case 'scan':
+    cmdScan(arg1); break;
+  case 'list':
+    cmdList(arg1 === '--tag' ? arg2 : null); break;
+  case 'find':
+    if (!arg1) { console.error('usage: idx find <query>'); process.exit(1); }
+    cmdFind(arg1); break;
+  case 'tags':
+    cmdTags(); break;
+  case 'tag':
+    if (!arg1 || !arg2) { console.error('usage: idx tag <query> <tags...> | --add <t> | --del <t>'); process.exit(1); }
+    if (arg2 === '--add') cmdTag(arg1, 'add', process.argv.slice(4));
+    else if (arg2 === '--del') cmdTag(arg1, 'del', process.argv.slice(4));
+    else cmdTag(arg1, 'set', process.argv.slice(3));
+    break;
+  default:
+    console.error(`error: unknown command '${cmd}'`);
+    usage();
+    process.exit(1);
+}

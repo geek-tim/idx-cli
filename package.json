@@ -1,0 +1,7 @@
+{
+  "name": "idx",
+  "version": "1.0.0",
+  "description": "Local knowledge & project indexer — scan, tag, search your Documents",
+  "bin": { "idx": "./idx" },
+  "license": "MIT"
+}
