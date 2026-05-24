@@ -4,8 +4,23 @@ const path = require('path');
 const os = require('os');
 
 const HOME = os.homedir();
-const BASE = path.join(HOME, 'Documents');
-const DIRS = ['projects', 'notes', 'archives', 'inbox'];
+const CONFIG_DIR = path.join(HOME, '.config', 'idx-cli');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+
+function loadConfig() {
+  try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); }
+  catch { return { baseDir: path.join(HOME, 'Documents'), dirs: ['projects', 'notes', 'archives', 'inbox'] }; }
+}
+
+function saveConfig(cfg) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+let CONFIG = loadConfig();
+const BASE = process.env.IDX_BASE || CONFIG.baseDir;
+const DIRS = CONFIG.dirs;
+
 const INDEX_FILE = path.join(HOME, '.local', 'share', 'idx', 'index.json');
 
 function loadIndex() {
@@ -18,8 +33,7 @@ function saveIndex(idx) {
   fs.writeFileSync(INDEX_FILE, JSON.stringify(idx, null, 2));
 }
 
-function short(p) { return p.replace(HOME + '/Documents/', ''); }
-function rel(p) { return p.replace(HOME, '~'); }
+function short(p) { return p.replace(BASE + '/', '').replace(HOME + '/', ''); }
 
 const RENDER = process.argv.includes('--render');
 function out(text) {
@@ -52,10 +66,13 @@ Commands:
   tags              Show all tags with counts
   tag <query> <t1> [t2..]    Replace tags for matching items
   tag <query> --add <t1>     Add tags
+  tag <query> --add <t1>     Add tags
   tag <query> --del <t1>     Remove tags
+  config [key=val..]  Show or set config (baseDir, dirs)
 
 Options:
   --render            Pipe output through glow (if installed) for rendered markdown
+  IDX_BASE=path       Override base directory via env var
 
   -h, --help          Show this help
 `);
@@ -159,6 +176,24 @@ function cmdTags() {
   out(mdTable(['Tag', 'Count'], sorted));
 }
 
+function cmdConfig(kvs) {
+  if (kvs.length === 0) {
+    console.log(`baseDir: ${CONFIG.baseDir}`);
+    console.log(`dirs:    ${CONFIG.dirs.join(', ')}`);
+    return;
+  }
+  for (const kv of kvs) {
+    const [key, ...rest] = kv.split('=');
+    const val = rest.join('=');
+    if (key === 'dirs') CONFIG.dirs = val.split(',').map(s => s.trim());
+    else if (key === 'baseDir') CONFIG.baseDir = val;
+    else console.error(`unknown config key: ${key}`);
+  }
+  saveConfig(CONFIG);
+  CONFIG = loadConfig();
+  console.log('config updated');
+}
+
 function cmdTag(query, mode, tagArgs) {
   const idx = loadIndex();
   const q = query.toLowerCase();
@@ -208,6 +243,9 @@ switch (cmd) {
     if (arg2 === '--add') cmdTag(arg1, 'add', process.argv.slice(4));
     else if (arg2 === '--del') cmdTag(arg1, 'del', process.argv.slice(4));
     else cmdTag(arg1, 'set', process.argv.slice(3));
+    break;
+  case 'config':
+    cmdConfig(process.argv.slice(3));
     break;
   default:
     console.error(`error: unknown command '${cmd}'`);
