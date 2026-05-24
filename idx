@@ -21,6 +21,25 @@ function saveIndex(idx) {
 function short(p) { return p.replace(HOME + '/Documents/', ''); }
 function rel(p) { return p.replace(HOME, '~'); }
 
+const RENDER = process.argv.includes('--render');
+function out(text) {
+  if (RENDER) {
+    const { execSync } = require('child_process');
+    try { execSync('glow', { input: text, stdio: 'inherit' }); }
+    catch { console.log(text); }
+  } else {
+    console.log(text);
+  }
+}
+function mdTable(headers, rows) {
+  const cols = headers.length;
+  const colWidths = headers.map((h, i) => Math.max(h.length, ...rows.map(r => String(r[i] || '').length)));
+  const sep = '| ' + colWidths.map(w => '-'.repeat(w)).join(' | ') + ' |';
+  const header = '| ' + headers.map((h, i) => h.padEnd(colWidths[i])).join(' | ') + ' |';
+  const body = rows.map(r => '| ' + r.map((v, i) => String(v || '').padEnd(colWidths[i])).join(' | ') + ' |');
+  return [header, sep, ...body].join('\n');
+}
+
 function usage() {
   console.log(`
 Usage: idx-cli <command> [args]
@@ -34,17 +53,25 @@ Commands:
   tag <query> <t1> [t2..]    Replace tags for matching items
   tag <query> --add <t1>     Add tags
   tag <query> --del <t1>     Remove tags
-  -h, --help        Show this help
+
+Options:
+  --render            Pipe output through glow (if installed) for rendered markdown
+
+  -h, --help          Show this help
 `);
 }
 
 // --- Commands ---
 
+function printEntry(e) {
+  return [short(e.path), e.tags.length ? e.tags.join(', ') : '-', e.type === 'dir' ? 'dir' : 'file'];
+}
+
 function cmdInit() {
   for (const d of DIRS) {
     const p = path.join(BASE, d);
     fs.mkdirSync(p, { recursive: true });
-    console.log(`  ${short(p)}/`);
+    console.log(`- ${short(p)}/`);
   }
 }
 
@@ -55,7 +82,7 @@ function cmdScan(target) {
   if (!target) {
     const before = idx.entries.length;
     idx.entries = idx.entries.filter(e => fs.existsSync(e.path));
-    if (before > idx.entries.length) console.log(`  cleaned ${before - idx.entries.length} stale entries`);
+    if (before > idx.entries.length) console.log(`- cleaned ${before - idx.entries.length} stale entries`);
   }
   if (!fs.existsSync(scanPath)) { console.error('error: path not found'); process.exit(1); }
 
@@ -65,7 +92,7 @@ function cmdScan(target) {
     return name.startsWith('.') || (isDir && SKIP_DIRS.includes(name));
   }
 
-  const entries = [];
+  const newEntries = [];
   function walk(dir, depth) {
     let items;
     try { items = fs.readdirSync(dir, { withFileTypes: true }); }
@@ -79,42 +106,34 @@ function cmdScan(target) {
       if (existing) {
         existing.updated = new Date().toISOString();
         if (existing.tags.length === 0) existing.tags = defaultTags;
-        entries.push(existing);
+        newEntries.push(existing);
       } else {
         const entry = {
-          path: full,
-          name: item.name,
+          path: full, name: item.name,
           type: item.isDirectory() ? 'dir' : 'file',
           tags: defaultTags,
           created: new Date().toISOString(),
           updated: new Date().toISOString(),
         };
         idx.entries.push(entry);
-        entries.push(entry);
-        console.log(`  + ${short(full)}`);
+        newEntries.push(entry);
+        console.log(`- ${short(full)}`);
       }
-
       if (item.isDirectory() && depth < 2) walk(full, depth + 1);
     }
   }
 
   walk(scanPath, 0);
   saveIndex(idx);
-  console.log(`\n  ${entries.length} items indexed`);
-}
-
-function printEntry(e) {
-  const tags = e.tags.length ? e.tags.join(', ') : '-';
-  const icon = e.type === 'dir' ? '📁' : '📄';
-  console.log(`  ${icon} ${short(e.path).padEnd(40)} ${tags}`);
+  console.log(`\n> ${newEntries.length} items indexed`);
 }
 
 function cmdList(filterTag) {
   const idx = loadIndex();
   let entries = idx.entries;
   if (filterTag) entries = entries.filter(e => e.tags.includes(filterTag));
-  if (entries.length === 0) { console.log('  (no entries)'); return; }
-  for (const e of entries) printEntry(e);
+  if (entries.length === 0) { out('_(no entries)_'); return; }
+  out(mdTable(['Path', 'Tags', 'Type'], entries.map(e => printEntry(e))));
 }
 
 function cmdFind(query) {
@@ -125,8 +144,8 @@ function cmdFind(query) {
     e.path.toLowerCase().includes(q) ||
     e.tags.some(t => t.toLowerCase().includes(q))
   );
-  if (entries.length === 0) { console.log('  (no matches)'); return; }
-  for (const e of entries) printEntry(e);
+  if (entries.length === 0) { out('_(no matches)_'); return; }
+  out(mdTable(['Path', 'Tags', 'Type'], entries.map(e => printEntry(e))));
 }
 
 function cmdTags() {
@@ -136,13 +155,8 @@ function cmdTags() {
     for (const t of e.tags) { tagMap[t] = (tagMap[t] || 0) + 1; }
   }
   const sorted = Object.entries(tagMap).sort((a, b) => b[1] - a[1]);
-  if (sorted.length === 0) { console.log('  (no tags)'); return; }
-  const maxCount = sorted[0][1];
-  const barWidth = 20;
-  for (const [tag, count] of sorted) {
-    const bar = '█'.repeat(Math.round((count / maxCount) * barWidth));
-    console.log(`  ${tag.padEnd(16)} ${String(count).padStart(3)}  ${bar}`);
-  }
+  if (sorted.length === 0) { out('_(no tags)_'); return; }
+  out(mdTable(['Tag', 'Count'], sorted));
 }
 
 function cmdTag(query, mode, tagArgs) {
@@ -154,20 +168,18 @@ function cmdTag(query, mode, tagArgs) {
     e.tags.some(t => t.toLowerCase().includes(q))
   );
 
-  if (entries.length === 0) { console.log('(no matches)'); process.exit(1); }
+  if (entries.length === 0) { console.error('(no matches)'); process.exit(1); }
 
+  const lines = [];
   for (const e of entries) {
     const old = [...e.tags];
-    if (mode === 'set') {
-      e.tags = [...new Set(tagArgs)];
-    } else if (mode === 'add') {
-      for (const t of tagArgs) { if (!e.tags.includes(t)) e.tags.push(t); }
-    } else if (mode === 'del') {
-      e.tags = e.tags.filter(t => !tagArgs.includes(t));
-    }
-    console.log(`  ${short(e.path)}  ${old.join(', ')} → ${e.tags.join(', ')}`);
+    if (mode === 'set') e.tags = [...new Set(tagArgs)];
+    else if (mode === 'add') { for (const t of tagArgs) { if (!e.tags.includes(t)) e.tags.push(t); } }
+    else if (mode === 'del') e.tags = e.tags.filter(t => !tagArgs.includes(t));
+    lines.push(`- ${short(e.path)}: \`${old.join(', ')}\` → \`${e.tags.join(', ')}\``);
   }
   saveIndex(idx);
+  console.log(lines.join('\n'));
 }
 
 // --- Main ---
