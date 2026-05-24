@@ -22,7 +22,7 @@ function rel(p) { return p.replace(HOME, '~'); }
 
 function usage() {
   console.log(`
-Usage: idx <command> [args]
+Usage: idx-cli <command> [args]
 
 Commands:
   init              Create ~/Documents/{projects,notes,archives,inbox}/
@@ -188,12 +188,12 @@ switch (cmd) {
   case 'list':
     cmdList(arg1 === '--tag' ? arg2 : null); break;
   case 'find':
-    if (!arg1) { console.error('usage: idx find <query>'); process.exit(1); }
+    if (!arg1) { console.error('usage: idx-cli find <query>'); process.exit(1); }
     cmdFind(arg1); break;
   case 'tags':
     cmdTags(); break;
   case 'tag':
-    if (!arg1 || !arg2) { console.error('usage: idx tag <query> <tags...> | --add <t> | --del <t>'); process.exit(1); }
+    if (!arg1 || !arg2) { console.error('usage: idx-cli tag <query> <tags...> | --add <t> | --del <t>'); process.exit(1); }
     if (arg2 === '--add') cmdTag(arg1, 'add', process.argv.slice(4));
     else if (arg2 === '--del') cmdTag(arg1, 'del', process.argv.slice(4));
     else cmdTag(arg1, 'set', process.argv.slice(3));
